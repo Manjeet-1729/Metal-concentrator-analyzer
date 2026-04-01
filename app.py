@@ -255,120 +255,36 @@ if st.session_state.test_type:
                 else:
                     conc_label = f"{int(concentration)} µM"
 
-                # ── Confidence calculation ─────────────────────────────────
-                MAX_DIST = 80.0  # distances beyond this = 0% confidence
-                confidence_pct = max(0, int((1 - distance / MAX_DIST) * 100))
-
-                if distance < 15:
-                    conf_label  = "High"
-                    conf_icon   = "✅"
-                    conf_color  = "#2e7d32"
-                    bar_color   = "#43a047"
-                    conf_msg    = None
-                elif distance < 35:
-                    conf_label  = "Medium"
-                    conf_icon   = "⚠️"
-                    conf_color  = "#e65100"
-                    bar_color   = "#fb8c00"
-                    conf_msg    = "The colour match is approximate. Try retaking the photo with more even lighting."
-                else:
-                    conf_label  = "Low"
-                    conf_icon   = "❌"
-                    conf_color  = "#c62828"
-                    bar_color   = "#e53935"
-                    conf_msg    = None  # shown separately as warning box
-
-                # Result card — only show if confidence not critically low
-                if distance < MAX_DIST:
-                    st.markdown(f"""
-                    <div class="result-box" style="{'opacity:0.6;' if distance >= 35 else ''}">
-                      <p style="color:#1b5e20; font-size:.9rem; margin-bottom:.3rem;">🔍 Closest match found</p>
-                      <h2>{conc_label}</h2>
-                      <p>{element} concentration</p>
-                      <hr style="border:1px solid #a5d6a7; margin:1rem 0;">
-                      <p style="margin:0; font-size:.85rem; color:#388e3c;">
-                        Matched reference colour:&nbsp;
-                        <span class="rgb-swatch" style="background:{matched_hex}; color:{matched_txt}; font-size:.8rem; padding:.2rem .7rem;">
-                          RGB ({matched_rgb[0]}, {matched_rgb[1]}, {matched_rgb[2]})
-                        </span>
-                        &nbsp;| RGB distance: <strong>{distance:.1f}</strong>
-                      </p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div style="background:#ffebee; border:2px solid #e53935; border-radius:14px;
-                                padding:1.5rem; text-align:center; margin-top:1.5rem;">
-                      <span style="font-size:2.5rem;">🚫</span>
-                      <h3 style="color:#c62828; margin:.5rem 0 .3rem;">No reliable match found</h3>
-                      <p style="color:#b71c1c; margin:0;">RGB distance is {distance:.1f} — too far from any reference colour.</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # ── Confidence meter ───────────────────────────────────────────
                 st.markdown(f"""
-                <div style="background:white; border:2px solid #e3eaf5; border-radius:14px;
-                            padding:1.4rem 1.6rem; margin-top:1.2rem;">
-                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:.6rem;">
-                    <span style="font-weight:700; font-size:1rem; color:#1a237e;">
-                      {conf_icon}&nbsp; Prediction Confidence
+                <div class="result-box">
+                  <p style="color:#1b5e20; font-size:.9rem; margin-bottom:.3rem;">✅ Closest match found</p>
+                  <h2>{conc_label}</h2>
+                  <p>{element} concentration</p>
+                  <hr style="border:1px solid #a5d6a7; margin:1rem 0;">
+                  <p style="margin:0; font-size:.85rem; color:#388e3c;">
+                    Matched reference colour:&nbsp;
+                    <span class="rgb-swatch" style="background:{matched_hex}; color:{matched_txt}; font-size:.8rem; padding:.2rem .7rem;">
+                      RGB ({matched_rgb[0]}, {matched_rgb[1]}, {matched_rgb[2]})
                     </span>
-                    <span style="font-weight:800; font-size:1.3rem; color:{conf_color};">
-                      {confidence_pct}% &nbsp;<span style="font-size:.9rem; font-weight:600;">{conf_label}</span>
-                    </span>
-                  </div>
-
-                  <!-- track -->
-                  <div style="background:#e0e0e0; border-radius:99px; height:18px; width:100%; overflow:hidden;">
-                    <!-- fill -->
-                    <div style="background:linear-gradient(90deg, {bar_color}, {bar_color}cc);
-                                width:{confidence_pct}%; height:100%; border-radius:99px;
-                                transition:width .4s ease;"></div>
-                  </div>
-
-                  <!-- scale labels -->
-                  <div style="display:flex; justify-content:space-between;
-                              font-size:.72rem; color:#90a4ae; margin-top:.35rem;">
-                    <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-                  </div>
-
-                  <!-- threshold markers legend -->
-                  <div style="display:flex; gap:1.2rem; margin-top:.9rem; flex-wrap:wrap;">
-                    <span style="font-size:.78rem; color:#2e7d32;">
-                      🟢 High ≥ 81%&nbsp;(distance &lt; 15)
-                    </span>
-                    <span style="font-size:.78rem; color:#e65100;">
-                      🟠 Medium 56–80%&nbsp;(distance 15–35)
-                    </span>
-                    <span style="font-size:.78rem; color:#c62828;">
-                      🔴 Low &lt; 56%&nbsp;(distance &gt; 35)
-                    </span>
-                  </div>
+                    &nbsp;| Distance: <strong>{distance:.1f}</strong>
+                  </p>
                 </div>
                 """, unsafe_allow_html=True)
 
-                # ── Warning / tip box based on confidence ──────────────────────
-                if distance >= MAX_DIST:
-                    st.error(
-                        "❌ **Image quality too low for a reliable result.**\n\n"
-                        "The extracted colour does not match any reference in the dataset. "
-                        "Please retake the photo and ensure:\n"
-                        "- The test tube is **centred** and fills most of the frame\n"
-                        "- Lighting is **uniform** — avoid shadows or direct flash\n"
-                        "- The solution is **fully mixed** before photographing\n"
-                        "- Use a **plain white or light background**"
-                    )
-                elif distance >= 35:
-                    st.warning(
-                        "⚠️ **Low confidence — consider retaking the photo.**\n\n"
-                        f"{conf_msg}\n\n"
-                        "Tips for a better result:\n"
-                        "- Shoot in natural daylight or under a consistent lab light\n"
-                        "- Keep the test tube **vertical and centred**\n"
-                        "- Avoid reflections on the glass"
-                    )
-                elif distance >= 15:
-                    st.info(f"ℹ️ {conf_msg}")
+                # Confidence
+                if distance < 15:
+                    conf, conf_color = "High ✅", "#2e7d32"
+                elif distance < 35:
+                    conf, conf_color = "Medium ⚠️", "#e65100"
+                else:
+                    conf, conf_color = "Low ❌ — retake photo in better lighting", "#c62828"
+
+                st.markdown(f"""
+                <p style="text-align:center; margin-top:.8rem; font-size:.9rem;">
+                  Match confidence: <strong style="color:{conf_color};">{conf}</strong>
+                  &nbsp;(RGB distance = {distance:.1f})
+                </p>
+                """, unsafe_allow_html=True)
 
                 with st.expander("📋 View full reference data"):
                     st.dataframe(df, width="stretch")
