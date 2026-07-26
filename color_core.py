@@ -82,14 +82,19 @@ def estimate_lighting_gains(full: np.ndarray, region_frac=(0.10, 0.90, 0.10, 0.9
 
 
 def extract_liquid_color(rgb_array: np.ndarray, gains: np.ndarray,
-                          search_frac=(0.20, 0.80, 0.15, 0.85)) -> dict:
+                          search_frac=(0.20, 0.80, 0.15, 0.85),
+                          sat_thresh: float = 0.15, val_min: float = 0.08, val_max: float = 0.95,
+                          min_pixel_frac: float = 0.02, min_pixel_count: int = 30,
+                          dark_thresh: float = 35, bright_thresh: float = 240,
+                          glare_thresh_pct: float = 12, blur_thresh: float = 8) -> dict:
     """
     Given an already-loaded RGB uint8/float array and known lighting-correction
     gains, detects the liquid region within search_frac bounds (fx0, fx1, fy0, fy1)
     and returns the extracted colour + quality diagnostics. This is the shared
-    core used by both analyse_image() (single-tube app uploads) and the
-    calibration script (multi-tube strip crops, which reuse one set of gains
-    estimated from the full strip instead of re-estimating per narrow crop).
+    core used by analyse_image() and the calibration script. Thresholds are
+    exposed as parameters so callers with different photo styles (full ambient
+    photos vs. tightly pre-cropped capless tube photos) can tune sensitivity
+    without duplicating the underlying logic.
     """
     h, w, _ = rgb_array.shape
     corrected_full = np.clip(rgb_array.astype(np.float64) * gains, 0, 255)
@@ -106,14 +111,14 @@ def extract_liquid_color(rgb_array: np.ndarray, gains: np.ndarray,
     # "liquid-like" = has real colour (not glass/background/glare/shadow).
     # Note: this does NOT require a light background — a saturated colour against a
     # dark/black background (e.g. backlit tube photos) is detected just as well, since
-    # the black background simply has very low V and gets excluded by the val>0.08 test.
-    liquid_mask = (sat > 0.15) & (val > 0.08) & (val < 0.95)
-    glare_mask = (val > 0.95) & (sat < 0.15)
+    # the black background simply has very low V and gets excluded by the val_min test.
+    liquid_mask = (sat > sat_thresh) & (val > val_min) & (val < val_max)
+    glare_mask = (val > 0.95) & (sat < sat_thresh)
     glare_pct = float(glare_mask.mean() * 100)
 
     flags = []  # list of (severity, message)  severity: "bad" | "mid"
     region_method = "auto-detected"
-    if liquid_mask.sum() >= max(30, 0.02 * len(search_pixels)):
+    if liquid_mask.sum() >= max(min_pixel_count, min_pixel_frac * len(search_pixels)):
         liquid_pixels = search_pixels[liquid_mask]
     else:
         # Fallback: narrow centre crop, old-style brightness filter
@@ -126,24 +131,24 @@ def extract_liquid_color(rgb_array: np.ndarray, gains: np.ndarray,
         fb_brightness = fallback_pixels.mean(axis=1)
         fb_mask = (fb_brightness > 15) & (fb_brightness < 240)
         liquid_pixels = fallback_pixels[fb_mask] if fb_mask.sum() > 10 else fallback_pixels
-        flags.append(("mid", "Couldn't confidently detect the tube/liquid. Make sure the tube is centred and fills more of the frame."))
+        flags.append(("mid", "Couldn't confidently detect the tube/liquid. Make sure the photo is cropped tightly to the tube body."))
 
-    if glare_pct > 12:
+    if glare_pct > glare_thresh_pct:
         flags.append(("mid", f"Glare detected on ~{glare_pct:.0f}% of the tube area. Avoid direct reflections/flash."))
 
     # ---- Quality checks computed from the LIQUID REGION itself, not the whole frame ------
     # (a photo with a deliberately dark/black background around a well-lit tube should not
     # be flagged as "too dark" just because most of the frame is black background)
     region_brightness = float(liquid_pixels.mean())
-    if region_brightness < 35:
+    if region_brightness < dark_thresh:
         flags.append(("bad", "The liquid/tube area itself looks too dark. Increase lighting on the sample (background can stay dark)."))
-    elif region_brightness > 240:
+    elif region_brightness > bright_thresh:
         flags.append(("mid", "The liquid/tube area looks overexposed/washed out. Reduce direct light or flash on the tube."))
 
     search_gray = search_crop.mean(axis=2)
     step = max(1, max(search_gray.shape) // 300)
     blur_score = laplacian_variance(search_gray[::step, ::step])
-    if blur_score < 8:
+    if blur_score < blur_thresh:
         flags.append(("bad", "Photo appears blurry. Hold the camera steady and refocus."))
 
     r = int(np.median(liquid_pixels[:, 0]))
@@ -163,14 +168,34 @@ def extract_liquid_color(rgb_array: np.ndarray, gains: np.ndarray,
 
 def analyse_image(img: Image.Image) -> dict:
     """
-    Runs the full pipeline for a SINGLE-TUBE photo (the normal app-upload case):
-    estimates lighting from the photo itself, then extracts the liquid colour.
-    This is THE canonical extraction function for live app uploads.
+    Canonical extraction function for the CURRENT expected input format:
+    a photo that is ALREADY tightly cropped to just the test-tube body,
+    with the cap excluded and minimal surrounding background (see the
+    in-app photo guidelines).
+
+    Deliberately applies NO gray-world / lighting correction. Earlier testing
+    showed that when a crop is dominated by the liquid's own saturated colour
+    with little-to-no neutral background (which is exactly what a tight
+    tube-only crop looks like), gray-world wrongly treats that colour as a
+    lighting cast and desaturates it — actively hurting accuracy. Since these
+    photos are expected to come from a consistent capture setup, raw pixel
+    values are matched directly against a reference CSV built the same way
+    (see extract_calibration_rgb.py), which is more accurate than a per-image
+    "correction" with nothing reliable to calibrate itself against.
     """
     img_rgb = img.convert("RGB")
     full = np.array(img_rgb)
-    gains = estimate_lighting_gains(full)
-    return extract_liquid_color(full, gains)
+    identity_gains = np.array([1.0, 1.0, 1.0])
+    # Nearly full-frame search (small margin to avoid edge/compression artifacts),
+    # since the input is already expected to be a tight tube-only crop.
+    return extract_liquid_color(
+        full, identity_gains,
+        search_frac=(0.03, 0.97, 0.02, 0.98),
+        sat_thresh=0.12, val_min=0.06, val_max=0.97,
+        min_pixel_frac=0.02, min_pixel_count=20,
+        dark_thresh=30, bright_thresh=245,
+        glare_thresh_pct=15, blur_thresh=5,
+    )
 
 
 # ── Matching with interpolation ─────────────────────────────────────────────

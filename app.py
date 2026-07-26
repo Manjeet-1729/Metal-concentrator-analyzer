@@ -214,26 +214,24 @@ if st.session_state.test_type:
 
     st.markdown("""
     <div class="guide-box">
-      <p class="guide-title">📸 How to take a photo for accurate results</p>
+      <p class="guide-title">📸 How to prepare your photo for accurate results</p>
       <table class="guide-table">
-        <tr><td>💡</td><td><strong>Lighting</strong> — use natural daylight or plain white light. No direct sun, no flash, no colored/dim bulbs.</td></tr>
-        <tr><td>⬜</td><td><strong>Background</strong> — place the tube against a plain white or light-grey background (paper/wall). Avoid colored surfaces.</td></tr>
-        <tr><td>🚫</td><td><strong>No glare</strong> — angle the tube/camera slightly so no bright reflection sits on the glass or liquid.</td></tr>
-        <tr><td>🎯</td><td><strong>Centered &amp; filling the frame</strong> — hold the tube upright in the middle of the shot; it should fill roughly half the frame, not be tiny in a corner.</td></tr>
-        <tr><td>📏</td><td><strong>Distance</strong> — shoot from about 15–20&nbsp;cm away, camera held level and steady (not tilted).</td></tr>
-        <tr><td>🖐️</td><td><strong>Steady shot</strong> — avoid motion blur; rest your elbows or use a stand if possible.</td></tr>
-        <tr><td>🕐</td><td><strong>Timing</strong> — photograph immediately after the recommended reaction time, not before/after (color shifts with time).</td></tr>
+        <tr><td>✂️</td><td><strong>Crop tightly to the tube body</strong> — the photo should show just the test tube itself, filling almost the entire frame.</td></tr>
+        <tr><td>🚫</td><td><strong>Exclude the cap</strong> — crop it out so the top of the photo starts at the liquid, not the cap/lid.</td></tr>
+        <tr><td>🚫</td><td><strong>No glare</strong> — avoid a bright reflection sitting directly on the liquid.</td></tr>
+        <tr><td>🖐️</td><td><strong>Steady, in-focus shot</strong> — avoid motion blur.</td></tr>
+        <tr><td>🕐</td><td><strong>Timing</strong> — photograph immediately after the recommended reaction time, not before/after (colour shifts with time).</td></tr>
       </table>
     </div>
     """, unsafe_allow_html=True)
 
     photo_confirmed = st.checkbox(
-        "✅ I took the photo following the guidelines above (good lighting, plain background, no glare, tube centred and filling the frame).",
+        "✅ My photo is cropped tightly to just the tube body, with the cap excluded.",
         key="photo_guidelines_ack"
     )
 
     if not photo_confirmed:
-        st.warning("Please confirm you followed the photo guidelines above before uploading — this is the single biggest factor in getting an accurate result.")
+        st.warning("Please confirm your photo is cropped correctly before uploading — this is the single biggest factor in getting an accurate result.")
 
     uploaded_img = st.file_uploader(
         "Upload test tube photo (JPG / PNG)",
@@ -254,7 +252,7 @@ if st.session_state.test_type:
             st.write(f"• Size: {img.size[0]} × {img.size[1]} px")
             st.write(f"• Mode: {img.mode}")
             st.write(f"• File: {uploaded_img.name}")
-            st.markdown('<div class="crop-box">📐 The liquid region is now auto-detected within the central area of the photo, with a fixed-crop fallback if detection is uncertain.</div>',
+            st.markdown('<div class="crop-box">📐 The colour is sampled across the whole photo — since it should already be cropped tightly to just the tube body (no cap), no further region-guessing is needed.</div>',
                         unsafe_allow_html=True)
 
         # ── Step 3 — Analyse ──────────────────────────────────────────────────
@@ -286,11 +284,11 @@ if st.session_state.test_type:
 
                 ca, cb = st.columns([1, 2])
                 with ca:
-                    st.image(img_crop, caption="Search region (liquid auto-detected within)", width="stretch")
+                    st.image(img_crop, caption="Liquid pixels detected within this crop", width="stretch")
                 with cb:
                     st.markdown(f"""
                     <div style="text-align:center; padding:1rem;">
-                      <p style="margin:0; color:#555; font-size:.9rem;">🎨 Extracted solution colour (lighting-corrected)</p>
+                      <p style="margin:0; color:#555; font-size:.9rem;">🎨 Extracted solution colour</p>
                       <span class="rgb-swatch" style="background:{hex_col}; color:{txt_col};">
                         RGB ({r}, {g}, {b}) &nbsp;|&nbsp; {hex_col}
                       </span>
