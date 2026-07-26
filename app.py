@@ -46,8 +46,14 @@ st.markdown("""
         text-align: center;
         margin-top: 1.5rem;
     }
+    .result-box.low-conf {
+        background: linear-gradient(135deg, #fff3e0, #fff8e1);
+        border: 2px solid #ffa726;
+    }
     .result-box h2 { color: #2e7d32; font-size: 2.4rem; margin: 0; }
+    .result-box.low-conf h2 { color: #e65100; }
     .result-box p  { color: #388e3c; margin: .4rem 0 0; font-size: 1rem; }
+    .result-box.low-conf p { color: #ef6c00; }
     .rgb-swatch {
         display: inline-block;
         border-radius: 8px;
@@ -78,6 +84,56 @@ st.markdown("""
         color: #1565c0;
         margin-top: .5rem;
     }
+    .warn-box {
+        border-radius: 10px;
+        padding: .7rem 1rem;
+        margin-top: .5rem;
+        font-size: .87rem;
+    }
+    .warn-bad { background: #ffebee; border: 1.5px solid #ef5350; color: #b71c1c; }
+    .warn-mid { background: #fff8e1; border: 1.5px solid #ffca28; color: #8d6e00; }
+    .conf-pill {
+        display: inline-block;
+        border-radius: 20px;
+        padding: .3rem 1rem;
+        font-weight: 700;
+        font-size: .85rem;
+        margin: .2rem .3rem;
+    }
+    .guide-box {
+        background: #fff8e1;
+        border: 2px solid #ffca28;
+        border-radius: 14px;
+        padding: 1.1rem 1.3rem;
+        margin: .6rem 0 1rem;
+    }
+    .guide-title {
+        font-weight: 700;
+        color: #8d6e00;
+        font-size: 1.02rem;
+        margin: 0 0 .6rem;
+    }
+    .guide-table { width: 100%; border-collapse: collapse; }
+    .guide-table td {
+        padding: .35rem .5rem;
+        font-size: .87rem;
+        color: #5d4a00;
+        vertical-align: top;
+    }
+    .guide-table td:first-child { width: 2rem; font-size: 1.1rem; text-align: center; }
+
+    /* Defensive overrides: force readable text on native Streamlit widgets
+       (checkbox labels, expander headers, plain markdown/write) in case the
+       viewer's browser/OS dark-mode preference leaks through despite the
+       locked light theme in .streamlit/config.toml */
+    [data-testid="stCheckbox"] label p,
+    [data-testid="stWidgetLabel"] p,
+    [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] summary p,
+    [data-testid="stMarkdownContainer"] p,
+    .stAlert p {
+        color: #1a1a2e !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,7 +141,7 @@ st.markdown("""
 st.markdown("""
 <div class="hero">
   <h1>🧪 Metal Concentration Analyzer</h1>
-  <p>Upload a test-tube image → RGB extracted from centre of solution → matched to concentration</p>
+  <p>Upload a test-tube image → colour extracted from the liquid → matched to concentration</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -97,7 +153,13 @@ if "test_type" not in st.session_state:
 @st.cache_data
 def load_csv(path):
     try:
-        return pd.read_csv(path)
+        df = pd.read_csv(path)
+        required = {"R", "G", "B"}
+        if not required.issubset(df.columns):
+            st.error(f"{path} is missing required columns {required}")
+            return None
+        df = df.dropna(subset=["R", "G", "B"]).reset_index(drop=True)
+        return df
     except Exception as e:
         st.error(f"Could not load {path}: {e}")
         return None
@@ -105,44 +167,9 @@ def load_csv(path):
 al_df = load_csv("al_data.csv")
 mn_df = load_csv("mn_data.csv")
 
-# ── RGB extraction (pure PIL) ──────────────────────────────────────────────────
-def extract_rgb(img: Image.Image, crop_pct: float = 0.20) -> tuple[int, int, int]:
-    """
-    Crops the centre (crop_pct x crop_pct) of the image — the liquid zone —
-    converts to RGB and returns the median R, G, B across all pixels in that crop.
-    Median is used instead of mean to ignore bright glare/dark edge pixels.
-    """
-    img_rgb = img.convert("RGB")
-    w, h    = img_rgb.size
+# ── Shared extraction/matching logic (single source of truth) ─────────────────
+from color_core import rgb_to_hsv_np, laplacian_variance, gray_world_gains, analyse_image, find_match, match_confidence
 
-    # Centre crop: middle 20% width, middle 40% height (tall test-tube shape)
-    x0 = int(w * (0.5 - crop_pct))
-    x1 = int(w * (0.5 + crop_pct))
-    y0 = int(h * 0.30)
-    y1 = int(h * 0.70)
-
-    cropped = img_rgb.crop((x0, y0, x1, y1))
-    pixels  = np.array(cropped).reshape(-1, 3)
-
-    # Remove near-white (glare) and near-black (shadows) pixels
-    brightness = pixels.mean(axis=1)
-    mask = (brightness > 30) & (brightness < 240)
-    filtered = pixels[mask] if mask.sum() > 10 else pixels
-
-    r = int(np.median(filtered[:, 0]))
-    g = int(np.median(filtered[:, 1]))
-    b = int(np.median(filtered[:, 2]))
-    return r, g, b, (x0, y0, x1, y1)
-
-# ── Closest match ──────────────────────────────────────────────────────────────
-def find_closest(df, r, g, b):
-    diffs = np.sqrt(
-        (df["R"] - r)**2 +
-        (df["G"] - g)**2 +
-        (df["B"] - b)**2
-    )
-    idx = diffs.idxmin()
-    return df.loc[idx], float(diffs[idx])
 
 # ── Step 1 — Choose test type ──────────────────────────────────────────────────
 st.markdown('<span class="step-label">STEP 1 — Choose Test Type</span>', unsafe_allow_html=True)
@@ -180,17 +207,39 @@ if st.session_state.test_type:
     df       = al_df if test == "Al" else mn_df
     conc_col = "Al_concentration_ppm" if test == "Al" else "Mn_concentration_ppm"
     element  = "Aluminium (Al)"       if test == "Al" else "Manganese (Mn)"
-    unit     = "µM"
 
     st.markdown("---")
     st.markdown(f'<span class="step-label">STEP 2 — Upload Test Tube Image ({element})</span>',
                 unsafe_allow_html=True)
-    st.info(f"Selected: **{element} Test** — make sure the test tube is centred in the photo.")
+
+    st.markdown("""
+    <div class="guide-box">
+      <p class="guide-title">📸 How to take a photo for accurate results</p>
+      <table class="guide-table">
+        <tr><td>💡</td><td><strong>Lighting</strong> — use natural daylight or plain white light. No direct sun, no flash, no colored/dim bulbs.</td></tr>
+        <tr><td>⬜</td><td><strong>Background</strong> — place the tube against a plain white or light-grey background (paper/wall). Avoid colored surfaces.</td></tr>
+        <tr><td>🚫</td><td><strong>No glare</strong> — angle the tube/camera slightly so no bright reflection sits on the glass or liquid.</td></tr>
+        <tr><td>🎯</td><td><strong>Centered &amp; filling the frame</strong> — hold the tube upright in the middle of the shot; it should fill roughly half the frame, not be tiny in a corner.</td></tr>
+        <tr><td>📏</td><td><strong>Distance</strong> — shoot from about 15–20&nbsp;cm away, camera held level and steady (not tilted).</td></tr>
+        <tr><td>🖐️</td><td><strong>Steady shot</strong> — avoid motion blur; rest your elbows or use a stand if possible.</td></tr>
+        <tr><td>🕐</td><td><strong>Timing</strong> — photograph immediately after the recommended reaction time, not before/after (color shifts with time).</td></tr>
+      </table>
+    </div>
+    """, unsafe_allow_html=True)
+
+    photo_confirmed = st.checkbox(
+        "✅ I took the photo following the guidelines above (good lighting, plain background, no glare, tube centred and filling the frame).",
+        key="photo_guidelines_ack"
+    )
+
+    if not photo_confirmed:
+        st.warning("Please confirm you followed the photo guidelines above before uploading — this is the single biggest factor in getting an accurate result.")
 
     uploaded_img = st.file_uploader(
         "Upload test tube photo (JPG / PNG)",
         type=["jpg", "jpeg", "png"],
-        key="tube_image"
+        key="tube_image",
+        disabled=not photo_confirmed
     )
 
     if uploaded_img:
@@ -205,7 +254,7 @@ if st.session_state.test_type:
             st.write(f"• Size: {img.size[0]} × {img.size[1]} px")
             st.write(f"• Mode: {img.mode}")
             st.write(f"• File: {uploaded_img.name}")
-            st.markdown('<div class="crop-box">📐 RGB will be sampled from the <strong>centre 20% width / middle 40% height</strong> of the image — the liquid zone.</div>',
+            st.markdown('<div class="crop-box">📐 The liquid region is now auto-detected within the central area of the photo, with a fixed-crop fallback if detection is uncertain.</div>',
                         unsafe_allow_html=True)
 
         # ── Step 3 — Analyse ──────────────────────────────────────────────────
@@ -216,78 +265,106 @@ if st.session_state.test_type:
             st.error("❌ Could not load concentration data. Check your CSV files.")
         else:
             if st.button("🔬 Analyse Concentration", type="primary", width="stretch"):
-                with st.spinner("Extracting colour from image…"):
-                    r, g, b, crop_coords = extract_rgb(img)
+                with st.spinner("Checking image quality and extracting colour…"):
+                    result = analyse_image(img)
 
-                # Show the crop region
-                img_crop = img.convert("RGB").crop(crop_coords)
+                r, g, b = result["rgb"]
+                x0, y0, x1, y1 = result["crop_box"]
+                img_crop = img.convert("RGB").crop((x0, y0, x1, y1))
                 hex_col  = f"#{r:02x}{g:02x}{b:02x}"
-                lum      = 0.299*r + 0.587*g + 0.114*b
+                lum      = 0.299 * r + 0.587 * g + 0.114 * b
                 txt_col  = "#000" if lum > 128 else "#fff"
+
+                # ---- Quality warnings, shown first ----
+                if result["flags"]:
+                    for severity, msg in result["flags"]:
+                        css_class = "warn-bad" if severity == "bad" else "warn-mid"
+                        icon = "🚫" if severity == "bad" else "⚠️"
+                        st.markdown(f'<div class="warn-box {css_class}">{icon} {msg}</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="warn-box" style="background:#e8f5e9;border:1.5px solid #66bb6a;color:#1b5e20;">✅ Image quality looks good.</div>', unsafe_allow_html=True)
 
                 ca, cb = st.columns([1, 2])
                 with ca:
-                    st.image(img_crop, caption="Sampled region", width="stretch")
+                    st.image(img_crop, caption="Search region (liquid auto-detected within)", width="stretch")
                 with cb:
                     st.markdown(f"""
                     <div style="text-align:center; padding:1rem;">
-                      <p style="margin:0; color:#555; font-size:.9rem;">🎨 Extracted solution colour</p>
+                      <p style="margin:0; color:#555; font-size:.9rem;">🎨 Extracted solution colour (lighting-corrected)</p>
                       <span class="rgb-swatch" style="background:{hex_col}; color:{txt_col};">
                         RGB ({r}, {g}, {b}) &nbsp;|&nbsp; {hex_col}
                       </span>
                       <p style="color:#888; font-size:.8rem; margin:.4rem 0 0;">
-                        Median of centre pixels (glare & shadows removed)
+                        Detection method: {result['region_method']}
                       </p>
                     </div>
                     """, unsafe_allow_html=True)
 
-                # Find closest match
-                best_row, distance = find_closest(df, r, g, b)
-                concentration  = best_row[conc_col]
-                matched_rgb    = (int(best_row["R"]), int(best_row["G"]), int(best_row["B"]))
-                matched_hex    = "#{:02x}{:02x}{:02x}".format(*matched_rgb)
-                matched_lum    = 0.299*matched_rgb[0] + 0.587*matched_rgb[1] + 0.114*matched_rgb[2]
-                matched_txt    = "#000" if matched_lum > 128 else "#fff"
+                # ---- Matching ----
+                match = find_match(df, r, g, b, conc_col)
+                distance = match["nearest_dist"]
+                nearest_row = match["nearest_row"]
+                interp_conc = match["interp_conc"]
 
-                # Format concentration label
-                if concentration == 0:
-                    conc_label = "Blank (0 µM)"
-                else:
-                    conc_label = f"{int(concentration)} µM"
+                matched_rgb = (int(nearest_row["R"]), int(nearest_row["G"]), int(nearest_row["B"]))
+                matched_hex = "#{:02x}{:02x}{:02x}".format(*matched_rgb)
+                matched_lum = 0.299 * matched_rgb[0] + 0.587 * matched_rgb[1] + 0.114 * matched_rgb[2]
+                matched_txt = "#000" if matched_lum > 128 else "#fff"
+
+                conf_label, conf_color, conf_score = match_confidence(distance, df)
+                low_conf = conf_label == "Low"
+
+                conc_label = f"{interp_conc:.1f} µM" if interp_conc != 0 else "Blank (0 µM)"
+                box_class = "result-box low-conf" if low_conf else "result-box"
+                headline = "⚠️ Best available match (low confidence)" if low_conf else "✅ Closest match found"
 
                 st.markdown(f"""
-                <div class="result-box">
-                  <p style="color:#1b5e20; font-size:.9rem; margin-bottom:.3rem;">✅ Closest match found</p>
+                <div class="{box_class}">
+                  <p style="font-size:.9rem; margin-bottom:.3rem;">{headline}</p>
                   <h2>{conc_label}</h2>
-                  <p>{element} concentration</p>
-                  <hr style="border:1px solid #a5d6a7; margin:1rem 0;">
-                  <p style="margin:0; font-size:.85rem; color:#388e3c;">
-                    Matched reference colour:&nbsp;
+                  <p>{element} concentration (interpolated between 2 nearest reference points)</p>
+                  <hr style="border:1px solid #c8e6c9; margin:1rem 0;">
+                  <p style="margin:0; font-size:.85rem;">
+                    Nearest single reference:&nbsp;
                     <span class="rgb-swatch" style="background:{matched_hex}; color:{matched_txt}; font-size:.8rem; padding:.2rem .7rem;">
-                      RGB ({matched_rgb[0]}, {matched_rgb[1]}, {matched_rgb[2]})
+                      RGB ({matched_rgb[0]}, {matched_rgb[1]}, {matched_rgb[2]}) → {nearest_row[conc_col]} µM
                     </span>
                     &nbsp;| Distance: <strong>{distance:.1f}</strong>
                   </p>
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Confidence
-                if distance < 15:
-                    conf, conf_color = "High ✅", "#2e7d32"
-                elif distance < 35:
-                    conf, conf_color = "Medium ⚠️", "#e65100"
-                else:
-                    conf, conf_color = "Low ❌ — retake photo in better lighting", "#c62828"
+                if low_conf:
+                    st.markdown(
+                        '<div class="warn-box warn-bad">🚫 This colour doesn\'t closely resemble any calibrated reference. '
+                        'The value above is only the *closest available* match and may be inaccurate. '
+                        'Please retake the photo with better lighting, less glare, and the tube filling more of the frame.</div>',
+                        unsafe_allow_html=True
+                    )
+
+                # ---- Confidence pills ----
+                quality_score = 100
+                for severity, _ in result["flags"]:
+                    quality_score -= 35 if severity == "bad" else 15
+                quality_score = max(0, quality_score)
+                q_color = "#2e7d32" if quality_score >= 70 else ("#e65100" if quality_score >= 40 else "#c62828")
 
                 st.markdown(f"""
-                <p style="text-align:center; margin-top:.8rem; font-size:.9rem;">
-                  Match confidence: <strong style="color:{conf_color};">{conf}</strong>
-                  &nbsp;(RGB distance = {distance:.1f})
+                <p style="text-align:center; margin-top:.9rem;">
+                  <span class="conf-pill" style="background:#e8f5e9; color:{q_color};">📷 Image Quality: {quality_score}/100</span>
+                  <span class="conf-pill" style="background:#e3f2fd; color:{conf_color};">🎯 Match Confidence: {conf_label} ({conf_score}/100)</span>
                 </p>
                 """, unsafe_allow_html=True)
 
                 with st.expander("📋 View full reference data"):
                     st.dataframe(df, width="stretch")
+
+                with st.expander("🔍 Diagnostic details"):
+                    st.write(f"- Liquid-region brightness (0-255): {result['brightness']:.1f}")
+                    st.write(f"- Blur score (higher = sharper): {result['blur_score']:.1f}")
+                    st.write(f"- Glare in search region: {result['glare_pct']:.1f}%")
+                    st.write(f"- Region detection method: {result['region_method']}")
+                    st.write(f"- Nearest-neighbour RGB distance: {distance:.2f}")
 
 else:
     st.markdown("""
